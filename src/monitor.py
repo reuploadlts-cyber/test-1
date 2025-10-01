@@ -22,9 +22,10 @@ except ImportError:
 class IVASMSMonitor:
     """Monitor for IVASMS.com OTP messages."""
     
-    def __init__(self, storage: Storage):
+    def __init__(self, storage: Storage, config=None):
         """Initialize the monitor."""
         self.storage = storage
+        self.config = config
         self.browser = None
         self.context = None
         self.page = None
@@ -66,29 +67,168 @@ class IVASMSMonitor:
     async def _login(self) -> bool:
         """Login to IVASMS.com."""
         try:
-            # Navigate to login page
+            # Use the passed config
+            if not self.config:
+                logger.error("No config provided to monitor")
+                return False
+            
+            logger.info("Navigating to IVASMS login page...")
             await self.page.goto("https://www.ivasms.com/login")
             
-            # Fill login form (simplified - you'll need to implement actual selectors)
-            await self.page.fill('input[name="email"]', "your_email@domain.com")
-            await self.page.fill('input[name="password"]', "your_password")
+            # Wait for page to load
+            await self.page.wait_for_load_state('domcontentloaded')
             
-            # Click login button
-            await self.page.click('button[type="submit"]')
+            # Try multiple possible selectors for email field
+            email_selectors = [
+                'input[name="email"]',
+                'input[type="email"]',
+                'input[id="email"]',
+                'input[placeholder*="email" i]',
+                'input[placeholder*="Email" i]'
+            ]
             
-            # Wait for navigation
-            await self.page.wait_for_load_state('networkidle')
+            email_filled = False
+            for selector in email_selectors:
+                try:
+                    if await self.page.locator(selector).count() > 0:
+                        await self.page.fill(selector, config.ivasms_email)
+                        logger.info(f"Email filled using selector: {selector}")
+                        email_filled = True
+                        break
+                except Exception as e:
+                    logger.debug(f"Email selector {selector} failed: {e}")
+                    continue
+            
+            if not email_filled:
+                logger.error("Could not find email input field")
+                return False
+            
+            # Try multiple possible selectors for password field
+            password_selectors = [
+                'input[name="password"]',
+                'input[type="password"]',
+                'input[id="password"]',
+                'input[placeholder*="password" i]',
+                'input[placeholder*="Password" i]'
+            ]
+            
+            password_filled = False
+            for selector in password_selectors:
+                try:
+                    if await self.page.locator(selector).count() > 0:
+                        await self.page.fill(selector, config.ivasms_password)
+                        logger.info(f"Password filled using selector: {selector}")
+                        password_filled = True
+                        break
+                except Exception as e:
+                    logger.debug(f"Password selector {selector} failed: {e}")
+                    continue
+            
+            if not password_filled:
+                logger.error("Could not find password input field")
+                return False
+            
+            # Try multiple possible selectors for login button
+            login_button_selectors = [
+                'button[type="submit"]',
+                'input[type="submit"]',
+                'button:has-text("Login")',
+                'button:has-text("Log in")',
+                'button:has-text("Sign in")',
+                '.login-button',
+                '#login-button',
+                'button[class*="login"]',
+                'button[class*="submit"]'
+            ]
+            
+            login_clicked = False
+            for selector in login_button_selectors:
+                try:
+                    if await self.page.locator(selector).count() > 0:
+                        await self.page.click(selector)
+                        logger.info(f"Login button clicked using selector: {selector}")
+                        login_clicked = True
+                        break
+                except Exception as e:
+                    logger.debug(f"Login button selector {selector} failed: {e}")
+                    continue
+            
+            if not login_clicked:
+                logger.error("Could not find login button")
+                return False
+            
+            # Wait for navigation or response
+            logger.info("Waiting for login response...")
+            try:
+                # Wait for either navigation or error message
+                await self.page.wait_for_load_state('networkidle', timeout=10000)
+            except Exception as e:
+                logger.warning(f"Navigation timeout: {e}")
+            
+            # Check if login was successful by looking for indicators
+            current_url = self.page.url
+            logger.info(f"Current URL after login: {current_url}")
+            
+            # Check for common success indicators
+            success_indicators = [
+                'dashboard',
+                'portal',
+                'account',
+                'profile',
+                'home'
+            ]
+            
+            login_successful = any(indicator in current_url.lower() for indicator in success_indicators)
+            
+            if not login_successful:
+                # Check for error messages
+                error_selectors = [
+                    '.error',
+                    '.alert-danger',
+                    '.login-error',
+                    '[class*="error"]',
+                    '[class*="alert"]'
+                ]
+                
+                for selector in error_selectors:
+                    try:
+                        error_element = self.page.locator(selector)
+                        if await error_element.count() > 0:
+                            error_text = await error_element.text_content()
+                            logger.error(f"Login error detected: {error_text}")
+                            return False
+                    except:
+                        continue
+                
+                # Take a screenshot for debugging
+                try:
+                    await self.page.screenshot(path="login_debug.png")
+                    logger.info("Screenshot saved as login_debug.png for debugging")
+                except:
+                    pass
+                
+                logger.error("Login failed - no success indicators found")
+                return False
             
             # Handle popup if present
             await self._handle_popup()
             
             # Navigate to SMS statistics
+            logger.info("Navigating to SMS statistics page...")
             await self.page.goto("https://www.ivasms.com/portal/sms/received")
+            await self.page.wait_for_load_state('domcontentloaded')
             
+            logger.info("Successfully logged in to IVASMS")
             return True
             
         except Exception as e:
             logger.error(f"Login failed: {e}")
+            # Take a screenshot for debugging
+            try:
+                await self.page.screenshot(path="login_error.png")
+                logger.info("Error screenshot saved as login_error.png")
+            except:
+                pass
             return False
     
     async def _handle_popup(self) -> bool:

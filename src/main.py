@@ -37,7 +37,7 @@ async def main():
         logger.info("Storage initialized successfully")
         
         # Initialize monitor
-        monitor = IVASMSMonitor(storage)
+        monitor = IVASMSMonitor(storage, config)
         logger.info("Monitor initialized successfully")
         
         # Initialize bot
