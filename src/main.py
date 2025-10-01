@@ -1,90 +1,65 @@
+#!/usr/bin/env python3
 """Main entry point for the OTP Forwarder Bot."""
 
 import asyncio
-import signal
 import sys
-from .logger_setup import setup_logging, get_logger
+import os
+from pathlib import Path
 
-# Setup logging first
-logger = setup_logging("INFO")
+# Add the project root to Python path
+project_root = Path(__file__).parent.parent
+sys.path.insert(0, str(project_root))
 
-# Import other modules after logging is setup
-try:
-    from .bot import OTPForwarderBot
-    from .config import config
-except ImportError as e:
-    logger.error(f"Failed to import modules: {e}")
-    sys.exit(1)
+# Now use absolute imports
+from src.logger_setup import setup_logging, get_logger
+from src.config import Config
+from src.storage import Storage
+from src.monitor import IVASMSMonitor
+from src.bot import OTPForwarderBot
 
-
-class BotManager:
-    """Manages the bot lifecycle."""
-    
-    def __init__(self):
-        self.bot = OTPForwarderBot()
-        self.shutdown_event = asyncio.Event()
-    
-    async def start(self):
-        """Start the bot."""
-        try:
-            logger.info("Starting OTP Forwarder Bot...")
-            
-            # Start the bot
-            success = await self.bot.start()
-            if not success:
-                logger.error("Failed to start bot")
-                return False
-            
-            # Set up signal handlers
-            self._setup_signal_handlers()
-            
-            # Start bot polling
-            await self.bot.run()
-            
-            return True
-            
-        except Exception as e:
-            logger.error(f"Failed to start bot: {e}")
-            return False
-    
-    def _setup_signal_handlers(self):
-        """Set up signal handlers for graceful shutdown."""
-        def signal_handler(signum, frame):
-            logger.info(f"Received signal {signum}, shutting down...")
-            self.shutdown_event.set()
-        
-        signal.signal(signal.SIGINT, signal_handler)
-        signal.signal(signal.SIGTERM, signal_handler)
-    
-    async def shutdown(self):
-        """Shutdown the bot gracefully."""
-        try:
-            logger.info("Shutting down bot...")
-            await self.bot.stop()
-            logger.info("Bot shutdown complete")
-        except Exception as e:
-            logger.error(f"Error during shutdown: {e}")
+logger = get_logger(__name__)
 
 
 async def main():
-    """Main function."""
-    manager = BotManager()
-    
+    """Main application entry point."""
     try:
-        await manager.start()
+        # Setup logging
+        setup_logging()
+        logger.info("Starting OTP Forwarder Bot...")
+        
+        # Load configuration
+        config = Config()
+        logger.info(f"Configuration loaded successfully")
+        
+        # Initialize storage
+        storage = Storage()
+        await storage.initialize()
+        logger.info("Storage initialized successfully")
+        
+        # Initialize monitor
+        monitor = IVASMSMonitor(storage)
+        logger.info("Monitor initialized successfully")
+        
+        # Initialize bot
+        bot = OTPForwarderBot(config, storage, monitor)
+        logger.info("Bot initialized successfully")
+        
+        # Start the bot
+        await bot.start()
+        
     except KeyboardInterrupt:
-        logger.info("Received keyboard interrupt")
+        logger.info("Received keyboard interrupt, shutting down...")
     except Exception as e:
-        logger.error(f"Unexpected error: {e}")
+        logger.error(f"Fatal error: {e}", exc_info=True)
+        sys.exit(1)
     finally:
-        await manager.shutdown()
+        # Cleanup
+        if 'monitor' in locals():
+            await monitor.cleanup()
+        if 'storage' in locals():
+            await storage.close()
+        logger.info("Bot shutdown complete")
 
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        logger.info("Bot stopped by user")
-    except Exception as e:
-        logger.error(f"Fatal error: {e}")
-        sys.exit(1)
+    asyncio.run(main())

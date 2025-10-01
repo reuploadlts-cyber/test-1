@@ -3,10 +3,13 @@
 
 import sys
 import os
+from pathlib import Path
 
-# Add src to path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
+# Add the project root to Python path
+project_root = Path(__file__).parent
+sys.path.insert(0, str(project_root))
 
+# Import and run the main function
 from src.main import main
 import asyncio
 
