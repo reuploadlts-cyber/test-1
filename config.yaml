@@ -44,4 +44,4 @@ selectors:
 storage:
   type: "sqlite"
   file: "bot_data.db"
-  backup_interval: 3600  # seconds
+  backup_interval: 3600

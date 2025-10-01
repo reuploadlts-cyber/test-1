@@ -1,4 +1,4 @@
-"""Configuration management for the OTP forwarder bot."""
+"""Configuration management for the OTP Forwarder Bot."""
 
 import os
 import yaml
@@ -13,13 +13,14 @@ class Config:
     """Configuration manager for the bot."""
     
     def __init__(self):
-        self._load_config()
+        """Initialize configuration."""
+        self._load_config_file()
         self._load_env_vars()
     
-    def _load_config(self):
+    def _load_config_file(self):
         """Load configuration from config.yaml."""
         try:
-            with open('config.yaml', 'r', encoding='utf-8') as f:
+            with open('config.yaml', 'r') as f:
                 self.config = yaml.safe_load(f)
         except FileNotFoundError:
             raise FileNotFoundError("config.yaml not found. Please create it from config.yaml.example")
@@ -43,47 +44,45 @@ class Config:
         self.poll_interval = int(os.getenv('POLL_INTERVAL', '8'))
         self.headless = os.getenv('HEADLESS', 'true').lower() == 'true'
         self.log_level = os.getenv('LOG_LEVEL', 'INFO')
-        self.database_url = os.getenv('DATABASE_URL', 'sqlite:///bot_data.db')
     
     @property
     def site_config(self) -> Dict[str, str]:
         """Get site configuration."""
-        return self.config['site']
+        return self.config.get('site', {})
     
     @property
     def playwright_config(self) -> Dict[str, Any]:
         """Get Playwright configuration."""
-        config = self.config['playwright'].copy()
-        config['headless'] = self.headless
-        return config
+        return self.config.get('playwright', {})
     
     @property
     def telegram_config(self) -> Dict[str, Any]:
         """Get Telegram configuration."""
-        return self.config['telegram']
+        return self.config.get('telegram', {})
     
     @property
     def selectors(self) -> Dict[str, Any]:
         """Get CSS selectors configuration."""
-        return self.config['selectors']
+        return self.config.get('selectors', {})
     
     @property
     def storage_config(self) -> Dict[str, Any]:
         """Get storage configuration."""
-        return self.config['storage']
+        return self.config.get('storage', {})
     
     def is_admin(self, user_id: int) -> bool:
         """Check if user is admin."""
         return user_id in self.admin_ids
     
     def get_sanitized_config(self) -> str:
-        """Get configuration without sensitive data for display."""
-        return f"""ADMIN_IDS: {self.admin_ids}
-POLL_INTERVAL: {self.poll_interval}s
-HEADLESS: {self.headless}
-LOG_LEVEL: {self.log_level}
-SITE_URL: {self.site_config['base_url']}"""
-
-
-# Global config instance
-config = Config()
+        """Get configuration without sensitive data."""
+        return f"""
+Bot Configuration:
+- ADMIN_IDS: {self.admin_ids}
+- POLL_INTERVAL: {self.poll_interval}s
+- HEADLESS: {self.headless}
+- LOG_LEVEL: {self.log_level}
+- SITE_URL: {self.site_config.get('base_url', 'Not configured')}
+- PLAYWRIGHT_TIMEOUT: {self.playwright_config.get('timeout_ms', 'Not configured')}ms
+- PLAYWRIGHT_RETRIES: {self.playwright_config.get('retries', 'Not configured')}
+"""

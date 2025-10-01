@@ -1,57 +1,56 @@
-"""Logging configuration for the bot."""
+"""Logging setup for the OTP Forwarder Bot."""
 
 import logging
-import logging.handlers
 import os
-from datetime import datetime
+from pathlib import Path
+from logging.handlers import RotatingFileHandler
 
 
-def setup_logging(log_level: str = "INFO") -> logging.Logger:
+def setup_logging(log_level: str = None, log_file: str = "logs/bot.log"):
     """Set up logging configuration."""
-    
     # Create logs directory if it doesn't exist
-    os.makedirs('logs', exist_ok=True)
+    log_path = Path(log_file)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    # Get log level from environment or use default
+    if log_level is None:
+        log_level = os.getenv('LOG_LEVEL', 'INFO').upper()
     
     # Configure root logger
     logger = logging.getLogger()
-    logger.setLevel(getattr(logging, log_level.upper()))
+    logger.setLevel(getattr(logging, log_level, logging.INFO))
     
     # Clear existing handlers
     logger.handlers.clear()
     
-    # Create formatters
-    detailed_formatter = logging.Formatter(
-        '%(asctime)s - %(name)s - %(levelname)s - %(funcName)s:%(lineno)d - %(message)s'
+    # Create formatter
+    formatter = logging.Formatter(
+        '%(asctime)s - %(levelname)s - %(name)s - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
     )
-    simple_formatter = logging.Formatter(
-        '%(asctime)s - %(levelname)s - %(message)s'
-    )
-    
-    # File handler with rotation
-    file_handler = logging.handlers.RotatingFileHandler(
-        'logs/bot.log',
-        maxBytes=10*1024*1024,  # 10MB
-        backupCount=5,
-        encoding='utf-8'
-    )
-    file_handler.setLevel(logging.DEBUG)
-    file_handler.setFormatter(detailed_formatter)
     
     # Console handler
     console_handler = logging.StreamHandler()
     console_handler.setLevel(logging.INFO)
-    console_handler.setFormatter(simple_formatter)
-    
-    # Add handlers
-    logger.addHandler(file_handler)
+    console_handler.setFormatter(formatter)
     logger.addHandler(console_handler)
     
-    # Suppress some noisy loggers
-    logging.getLogger('aiogram').setLevel(logging.WARNING)
-    logging.getLogger('playwright').setLevel(logging.WARNING)
-    logging.getLogger('asyncio').setLevel(logging.WARNING)
+    # File handler with rotation
+    file_handler = RotatingFileHandler(
+        log_file,
+        maxBytes=10*1024*1024,  # 10MB
+        backupCount=5
+    )
+    file_handler.setLevel(logging.DEBUG)
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
     
-    return logger
+    # Set specific logger levels
+    logging.getLogger('asyncio').setLevel(logging.WARNING)
+    logging.getLogger('urllib3').setLevel(logging.WARNING)
+    logging.getLogger('playwright').setLevel(logging.WARNING)
+    
+    logger.info(f"Logging initialized with level: {log_level}")
 
 
 def get_logger(name: str) -> logging.Logger:

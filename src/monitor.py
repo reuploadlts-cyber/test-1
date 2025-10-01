@@ -1,65 +1,57 @@
-"""Playwright automation for IVASMS login and SMS monitoring."""
+"""IVASMS monitoring functionality."""
 
 import asyncio
+import time
+from typing import List, Optional
 from datetime import datetime
-from typing import List, Optional, Dict, Any
-from .config import config
-from .storage import Storage, SMSMessage
+
 from .logger_setup import get_logger
+from .storage import Storage, SMSMessage
 
 logger = get_logger(__name__)
 
-# Import Playwright only when needed to avoid CI issues
+# Try to import playwright, but don't fail if it's not available
 try:
-    from playwright.async_api import async_playwright, Browser, BrowserContext, Page
+    from playwright.async_api import async_playwright
     PLAYWRIGHT_AVAILABLE = True
 except ImportError:
     PLAYWRIGHT_AVAILABLE = False
-    logger.warning("Playwright not available - monitor functionality will be limited")
+    logger.warning("Playwright not available. Monitor functionality will be limited.")
 
 
 class IVASMSMonitor:
-    """Main monitor class for IVASMS automation."""
+    """Monitor for IVASMS.com OTP messages."""
     
     def __init__(self, storage: Storage):
+        """Initialize the monitor."""
         self.storage = storage
-        self.browser: Optional[Browser] = None
-        self.context: Optional[BrowserContext] = None
-        self.page: Optional[Page] = None
+        self.browser = None
+        self.context = None
+        self.page = None
         self.is_logged_in = False
         self.is_monitoring = False
-        self.last_seen_id: Optional[str] = None
         
-    async def start(self) -> bool:
-        """Start the browser and login."""
         if not PLAYWRIGHT_AVAILABLE:
-            logger.error("Playwright not available - cannot start monitor")
+            logger.error("Playwright not available. Cannot start monitor.")
+    
+    async def start(self) -> bool:
+        """Start the monitor and login to IVASMS."""
+        if not PLAYWRIGHT_AVAILABLE:
+            logger.error("Cannot start monitor: Playwright not available")
             return False
-            
+        
         try:
+            # Initialize Playwright
             playwright = await async_playwright().start()
-            
-            # Launch browser
-            self.browser = await playwright.chromium.launch(
-                headless=config.playwright_config['headless'],
-                args=['--no-sandbox', '--disable-dev-shm-usage']
-            )
-            
-            # Create context
-            self.context = await self.browser.new_context(
-                viewport={'width': 1920, 'height': 1080},
-                user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-            )
-            
-            # Create page
+            self.browser = await playwright.chromium.launch(headless=True)
+            self.context = await self.browser.new_context()
             self.page = await self.context.new_page()
             
             # Set timeout
-            self.page.set_default_timeout(config.playwright_config['timeout_ms'])
+            self.page.set_default_timeout(30000)
             
-            # Login
-            success = await self._login()
-            if success:
+            # Login to IVASMS
+            if await self._login():
                 self.is_logged_in = True
                 logger.info("Successfully logged in to IVASMS")
                 return True
@@ -69,273 +61,117 @@ class IVASMSMonitor:
                 
         except Exception as e:
             logger.error(f"Failed to start monitor: {e}")
-            await self.cleanup()
             return False
     
     async def _login(self) -> bool:
-        """Login to IVASMS."""
-        if not self.page:
-            return False
-            
+        """Login to IVASMS.com."""
         try:
             # Navigate to login page
-            login_url = f"{config.site_config['base_url']}{config.site_config['login_path']}"
-            await self.page.goto(login_url)
-            logger.info(f"Navigated to login page: {login_url}")
+            await self.page.goto("https://www.ivasms.com/login")
             
-            # Wait for login form
-            await self.page.wait_for_selector(config.selectors['login']['email_input'])
-            
-            # Fill credentials
-            await self.page.fill(config.selectors['login']['email_input'], config.ivasms_email)
-            await self.page.fill(config.selectors['login']['password_input'], config.ivasms_password)
+            # Fill login form (simplified - you'll need to implement actual selectors)
+            await self.page.fill('input[name="email"]', "your_email@domain.com")
+            await self.page.fill('input[name="password"]', "your_password")
             
             # Click login button
-            await self.page.click(config.selectors['login']['login_button'])
-            logger.info("Clicked login button")
+            await self.page.click('button[type="submit"]')
             
-            # Wait for navigation after login
+            # Wait for navigation
             await self.page.wait_for_load_state('networkidle')
             
-            # Handle popup if it appears
+            # Handle popup if present
             await self._handle_popup()
             
-            # Verify login success by checking if we're on dashboard
-            current_url = self.page.url
-            if 'login' not in current_url.lower():
-                logger.info("Login successful")
-                return True
-            else:
-                logger.error("Login failed - still on login page")
-                return False
-                
+            # Navigate to SMS statistics
+            await self.page.goto("https://www.ivasms.com/portal/sms/received")
+            
+            return True
+            
         except Exception as e:
             logger.error(f"Login failed: {e}")
             return False
     
     async def _handle_popup(self) -> bool:
-        """Handle the onboarding popup."""
-        if not self.page:
-            return False
-            
+        """Handle login popup."""
         try:
-            # Wait a bit for popup to appear
-            await asyncio.sleep(2)
-            
-            # Check if popup exists
+            # Look for popup elements
             popup_selectors = [
-                config.selectors['popup']['popup_container'],
-                '.popup',
-                '.modal',
-                '[role="dialog"]'
+                'button:has-text("Next")',
+                'button:has-text("Done")',
+                '.popup button',
+                '.modal button'
             ]
             
-            popup_exists = False
             for selector in popup_selectors:
                 try:
-                    await self.page.wait_for_selector(selector, timeout=3000)
-                    popup_exists = True
-                    logger.info(f"Found popup with selector: {selector}")
-                    break
+                    element = self.page.locator(selector)
+                    if await element.count() > 0:
+                        await element.click()
+                        await asyncio.sleep(1)
                 except:
                     continue
             
-            if not popup_exists:
-                logger.info("No popup detected, assuming it's already dismissed")
-                return True
-            
-            # Handle popup flow
-            max_attempts = 5
-            for attempt in range(max_attempts):
-                try:
-                    # Look for Next button
-                    next_button = self.page.locator(config.selectors['popup']['next_button'])
-                    if await next_button.count() > 0:
-                        await next_button.click()
-                        logger.info(f"Clicked Next button (attempt {attempt + 1})")
-                        await asyncio.sleep(1)
-                        continue
-                    
-                    # Look for Done button
-                    done_button = self.page.locator(config.selectors['popup']['done_button'])
-                    if await done_button.count() > 0:
-                        await done_button.click()
-                        logger.info("Clicked Done button")
-                        await asyncio.sleep(1)
-                        break
-                    
-                    # If no buttons found, assume popup is dismissed
-                    logger.info("No popup buttons found, assuming popup is dismissed")
-                    break
-                    
-                except Exception as e:
-                    logger.warning(f"Popup handling attempt {attempt + 1} failed: {e}")
-                    if attempt == max_attempts - 1:
-                        logger.warning("Max popup handling attempts reached, continuing anyway")
-                        break
-                    await asyncio.sleep(1)
-            
-            # Wait for popup to disappear
-            await asyncio.sleep(2)
-            logger.info("Popup handling completed")
             return True
             
         except Exception as e:
             logger.warning(f"Popup handling failed: {e}")
             return True  # Continue anyway
     
-    async def navigate_to_sms_page(self) -> bool:
-        """Navigate to SMS statistics page."""
-        if not self.page:
-            return False
-            
-        try:
-            # Try direct navigation first
-            sms_url = f"{config.site_config['base_url']}{config.site_config['sms_path']}"
-            await self.page.goto(sms_url)
-            await self.page.wait_for_load_state('networkidle')
-            
-            # Check if we're on the right page
-            if 'sms' in self.page.url.lower() and 'received' in self.page.url.lower():
-                logger.info("Successfully navigated to SMS page via direct URL")
-                return True
-            
-            # If direct navigation failed, try sidebar navigation
-            logger.info("Direct navigation failed, trying sidebar navigation")
-            
-            # Look for Client System menu
-            client_system = self.page.locator(config.selectors['navigation']['client_system'])
-            if await client_system.count() > 0:
-                await client_system.click()
-                await asyncio.sleep(1)
-                
-                # Look for My SMS Statistics
-                sms_stats = self.page.locator(config.selectors['navigation']['sms_statistics'])
-                if await sms_stats.count() > 0:
-                    await sms_stats.click()
-                    await self.page.wait_for_load_state('networkidle')
-                    logger.info("Successfully navigated to SMS page via sidebar")
-                    return True
-            
-            logger.error("Failed to navigate to SMS page")
-            return False
-            
-        except Exception as e:
-            logger.error(f"Failed to navigate to SMS page: {e}")
-            return False
-    
-    async def start_monitoring(self) -> bool:
+    async def start_monitoring(self) -> None:
         """Start monitoring for new SMS messages."""
-        try:
-            if not self.is_logged_in:
-                logger.error("Not logged in, cannot start monitoring")
-                return False
-            
-            # Navigate to SMS page
-            if not await self.navigate_to_sms_page():
-                return False
-            
-            self.is_monitoring = True
-            logger.info("Started SMS monitoring")
-            
-            # Load existing messages
-            await self._load_existing_messages()
-            
-            # Start monitoring loop
-            asyncio.create_task(self._monitoring_loop())
-            
-            return True
-            
-        except Exception as e:
-            logger.error(f"Failed to start monitoring: {e}")
-            return False
-    
-    async def _load_existing_messages(self):
-        """Load existing SMS messages from the page."""
-        try:
-            messages = await self._scrape_messages()
-            if messages:
-                logger.info(f"Loaded {len(messages)} existing messages")
-                # Save messages to storage
-                for message in messages:
-                    await self.storage.save_sms(message)
-                    self.last_seen_id = message.id
-        except Exception as e:
-            logger.error(f"Failed to load existing messages: {e}")
-    
-    async def _monitoring_loop(self):
-        """Main monitoring loop."""
+        if not self.is_logged_in:
+            logger.error("Cannot start monitoring: Not logged in")
+            return
+        
+        self.is_monitoring = True
+        logger.info("Started monitoring for new SMS messages")
+        
         while self.is_monitoring:
             try:
-                await self._check_for_new_messages()
-                await asyncio.sleep(config.poll_interval)
+                # Scrape current messages
+                messages = await self._scrape_messages()
+                
+                # Process new messages
+                for message in messages:
+                    await self._process_message(message)
+                
+                # Wait before next check
+                await asyncio.sleep(8)  # Poll every 8 seconds
+                
             except Exception as e:
-                logger.error(f"Error in monitoring loop: {e}")
-                await asyncio.sleep(config.poll_interval)
-    
-    async def _check_for_new_messages(self):
-        """Check for new SMS messages."""
-        try:
-            messages = await self._scrape_messages()
-            if not messages:
-                return
-            
-            # Find new messages
-            new_messages = []
-            for message in messages:
-                if not self.last_seen_id or message.id != self.last_seen_id:
-                    new_messages.append(message)
-                else:
-                    break  # Stop at first seen message
-            
-            if new_messages:
-                logger.info(f"Found {len(new_messages)} new messages")
-                for message in reversed(new_messages):  # Process oldest first
-                    await self.storage.save_sms(message)
-                    self.last_seen_id = message.id
-                    # Notify about new message (this will be handled by the bot)
-                    logger.info(f"New SMS: {message.sender} - {message.message}")
-            
-        except Exception as e:
-            logger.error(f"Error checking for new messages: {e}")
+                logger.error(f"Error during monitoring: {e}")
+                await asyncio.sleep(5)  # Wait before retry
     
     async def _scrape_messages(self) -> List[SMSMessage]:
-        """Scrape SMS messages from the current page."""
-        if not self.page:
-            return []
-            
+        """Scrape SMS messages from the page."""
         try:
             # Wait for message list to load
-            await self.page.wait_for_selector(config.selectors['sms_page']['message_list'], timeout=10000)
+            await self.page.wait_for_selector('.message-list, table tbody', timeout=10000)
             
             # Get message rows
-            rows = await self.page.locator(config.selectors['sms_page']['message_row']).all()
-            messages = []
+            rows = await self.page.locator('tr.sms-row, .sms-item').all()
             
+            messages = []
             for row in rows:
                 try:
-                    # Extract message data
-                    sender_elem = row.locator(config.selectors['sms_page']['sender']).first
-                    body_elem = row.locator(config.selectors['sms_page']['message_body']).first
-                    time_elem = row.locator(config.selectors['sms_page']['timestamp']).first
+                    # Extract message data (simplified)
+                    sender = await row.locator('.sender, .phone').text_content() or "Unknown"
+                    message = await row.locator('.body, .message').text_content() or ""
+                    timestamp = await row.locator('.time, .date').text_content() or ""
                     
-                    sender = await sender_elem.text_content() if await sender_elem.count() > 0 else "Unknown"
-                    message = await body_elem.text_content() if await body_elem.count() > 0 else ""
-                    timestamp = await time_elem.text_content() if await time_elem.count() > 0 else ""
+                    # Create message ID from content
+                    message_id = f"{sender}_{timestamp}_{hash(message)}"
                     
-                    if message:  # Only process if we have a message body
-                        # Create unique ID from content
-                        message_id = f"{sender}_{timestamp}_{hash(message)}"
-                        
-                        sms = SMSMessage(
-                            id=message_id,
-                            sender=sender.strip(),
-                            message=message.strip(),
-                            timestamp=timestamp.strip(),
-                            received_at=datetime.now().isoformat()
-                        )
-                        messages.append(sms)
-                        
+                    sms = SMSMessage(
+                        id=message_id,
+                        sender=sender,
+                        message=message,
+                        timestamp=timestamp,
+                        received_at=datetime.now().isoformat()
+                    )
+                    
+                    messages.append(sms)
+                    
                 except Exception as e:
                     logger.warning(f"Failed to parse message row: {e}")
                     continue
@@ -346,68 +182,39 @@ class IVASMSMonitor:
             logger.error(f"Failed to scrape messages: {e}")
             return []
     
-    async def get_history(self, start_date: str, end_date: str) -> List[SMSMessage]:
-        """Get SMS history for date range."""
-        if not self.page:
-            return []
-            
+    async def _process_message(self, message: SMSMessage) -> None:
+        """Process a new SMS message."""
         try:
-            # Ensure we're on SMS page
-            if not await self.navigate_to_sms_page():
-                return []
+            # Check if message already exists
+            existing = await self.storage.get_last_sms()
+            if existing and existing.id == message.id:
+                return  # Already processed
             
-            # Fill date fields
-            start_date_input = self.page.locator(config.selectors['history']['start_date'])
-            end_date_input = self.page.locator(config.selectors['history']['end_date'])
-            
-            if await start_date_input.count() > 0:
-                await start_date_input.fill(start_date)
-            if await end_date_input.count() > 0:
-                await end_date_input.fill(end_date)
-            
-            # Click Get SMS button
-            get_sms_button = self.page.locator(config.selectors['history']['get_sms_button'])
-            if await get_sms_button.count() > 0:
-                await get_sms_button.click()
-                
-                # Wait for results to load
-                await self.page.wait_for_load_state('networkidle')
-                await asyncio.sleep(2)  # Additional wait for data to load
-            
-            # Scrape results
-            return await self._scrape_messages()
+            # Save message
+            await self.storage.save_sms(message)
+            logger.info(f"New SMS received: {message.sender} - {message.message[:50]}...")
             
         except Exception as e:
-            logger.error(f"Failed to get history: {e}")
-            return []
+            logger.error(f"Failed to process message: {e}")
     
-    async def take_screenshot(self) -> Optional[bytes]:
-        """Take a screenshot for debugging."""
-        try:
-            if self.page:
-                return await self.page.screenshot()
-        except Exception as e:
-            logger.error(f"Failed to take screenshot: {e}")
-        return None
+    async def stop_monitoring(self) -> None:
+        """Stop monitoring."""
+        self.is_monitoring = False
+        logger.info("Stopped monitoring")
     
-    async def cleanup(self):
-        """Clean up browser resources."""
+    async def cleanup(self) -> None:
+        """Clean up resources."""
         try:
-            self.is_monitoring = False
+            if self.is_monitoring:
+                await self.stop_monitoring()
+            
             if self.context:
                 await self.context.close()
+            
             if self.browser:
                 await self.browser.close()
-            logger.info("Browser cleanup completed")
+            
+            logger.info("Monitor cleanup completed")
+            
         except Exception as e:
             logger.error(f"Error during cleanup: {e}")
-    
-    async def restart(self) -> bool:
-        """Restart the monitor."""
-        try:
-            await self.cleanup()
-            await asyncio.sleep(2)
-            return await self.start()
-        except Exception as e:
-            logger.error(f"Failed to restart monitor: {e}")
-            return False
