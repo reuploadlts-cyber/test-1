@@ -61,7 +61,8 @@ site:
         with patch.dict(os.environ, {
             'TELEGRAM_TOKEN': 'test_token',
             'IVASMS_EMAIL': 'test@example.com',
-            'IVASMS_PASSWORD': 'test_password'
+            'IVASMS_PASSWORD': 'test_password',
+            'ADMIN_IDS': ''  # Explicitly set empty
         }):
             with patch('builtins.open', mock_open(read_data="""
 site:

@@ -145,7 +145,7 @@ class TestStorage:
         
         # Check if marked
         messages = await temp_db.get_recent_sms(1)
-        assert messages[0].forwarded is True
+        assert messages[0].forwarded == True
     
     @pytest.mark.asyncio
     async def test_state_management(self, temp_db):
